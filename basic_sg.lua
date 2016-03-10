@@ -30,8 +30,6 @@ full_net = nn.gModule({word_input,rec_input,probe_input},{output})
 
 w,dw = full_net:getParameters()
 
-sg_clone = util.clone_many_times(sg_net,num_words_per_sentence)
-probe_clone = util.clone_many_times(probe_net,num_words_per_sentence)
 
 out = sg_net:forward{torch.rand(word_dim),torch.rand(sg_dim)}
 out = sg_net:forward{torch.rand(word_dim),out}
@@ -53,22 +51,25 @@ train = function(x)
     local sg_grad = torch.zeros(num_words_per_sentence,sg_dim)
     local loss = 0
     for t = 1,num_words_per_sentence do
+        --calculate sentence gestalt
         local word = sentence[t]
-        sg[t+1] = sg_clone[t]:forward{word,sg[t]}
+        sg[t+1] = sg_net:forward{word,sg[t]}
+        --run through the probes
         for p = 1,num_probes do
-            local role = probe_clone[t]:forward{probe[p],sg[t+1]}
+            local role = probe_net:forward{probe[p],sg[t+1]}
             loss = loss + bce_crit:forward(role,role_targets[p])
             local grad = bce_crit:backward(role,role_targets[p])
-            sg_grad[t] = sg_grad[t] + probe_clone[t]:backward({probe[p],sg[t+1]},grad)[2]
+            --update probe network
+            sg_grad[t] = sg_grad[t] + probe_net:backward({probe[p],sg[t+1]},grad)[2]
         end
-    end
-    for t = num_words_per_sentence,-1,1 do
-        local word = sentence[t]
-        sg_clone[t]:backward({word,sg[t]},sg_grad[t])
+        --update SG network
+        sg_net:backward({word,sg[t]},sg_grad[t])
         --sg TD
-        loss = loss + bce_crit:forward(sg[t],sg[t+1])
-        local grad = bce_crit:backward(sg[t],sg[t+1])
-        sg_clone[t]:backward({word,sg[t]},grad)
+        if t > 1 then
+            loss = loss + bce_crit:forward(sg[t],sg[t+1])
+            local grad = bce_crit:backward(sg[t],sg[t+1])
+            sg_net:backward({word,sg[t]},grad)
+        end
     end
     return loss,dw
 end
